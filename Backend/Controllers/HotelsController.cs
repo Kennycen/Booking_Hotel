@@ -1,21 +1,25 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
+public record RegisterHotelRequest(string Name, string Address, string Contact, string City);
+
 [ApiController]
 [Route("api/hotels")]
-public class RoomsController : ControllerBase
+public class HotelsController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly ClerkUserAccessor _users;
 
-    public HotelsController(AppDbContext db)
+    public HotelsController(AppDbContext db, ClerkUserAccessor users)
     {
         _db = db;
+        _users = users;
     }
 
-    [HttpGet]
+    [HttpPost]
     public async Task<IActionResult> RegisterHotel(RegisterHotelRequest request)
     {
-        var ownerId = Request.Headers["X-User-Id"].FirstOrDefault();
+        var ownerId = _users.UserId;
         if (string.IsNullOrWhiteSpace(ownerId))
         {
             return Ok(new { success = false, message = "Not authenticated." });
