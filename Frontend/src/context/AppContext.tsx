@@ -11,24 +11,19 @@ import {
 } from "react";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
+import { errorMessage } from "../lib/errorMessage";
+import type { ApiResponse, Room } from "../types";
+
+export type { Room };
 
 axios.defaults.baseURL = import.meta.env.VITE_BACKEND_URL;
-
-export type Room = {
-  _id: string;
-  images: string[];
-  pricePerNight: number;
-  hotel: {
-    name: string;
-    address: string;
-    city: string;
-  };
-};
 
 type AppContextValue = {
   currency: string;
   navigate: ReturnType<typeof useNavigate>;
   user: ReturnType<typeof useUser>["user"];
+  authLoaded: boolean;
+  userReady: boolean;
   getToken: ReturnType<typeof useAuth>["getToken"];
   isOwner: boolean;
   setIsOwner: (value: boolean) => void;
@@ -46,60 +41,93 @@ const AppContext = createContext<AppContextValue | null>(null);
 export default function AppProvider({ children }: { children: ReactNode }) {
   const currency = import.meta.env.VITE_CURRENCY || "$";
   const navigate = useNavigate();
-  const { user } = useUser();
+  const { user, isLoaded } = useUser();
   const { getToken } = useAuth();
 
-  const [isOwner, setIsOwner] = useState(false);
+  const [ownerFlag, setOwnerFlag] = useState(false);
+  const [ownerForUserId, setOwnerForUserId] = useState<string | null>(null);
   const [showHotelReg, setShowHotelReg] = useState(false);
   const [searchedCities, setSearchedCities] = useState<string[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
 
-  const fetchRooms = async () => {
-    try {
-      const { data } = await axios.get("/api/rooms");
-      if (data.success) {
-        setRooms(
-          data.rooms.map((room: Room & { id?: string }) => ({
-            ...room,
-            _id: room._id ?? room.id ?? "",
-          })),
-        );
-      } else {
-        toast.error(data.message);
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load rooms");
-    }
+  const userReady = isLoaded && (!user || ownerForUserId === user.id);
+  const isOwner = Boolean(user && ownerForUserId === user.id && ownerFlag);
+
+  const setIsOwner = (value: boolean) => {
+    if (!user) return;
+    setOwnerFlag(value);
+    setOwnerForUserId(user.id);
   };
 
-  const fetchUser = async () => {
-    try {
-      const { data } = await axios.get("/api/user", {
-        headers: { Authorization: `Bearer ${await getToken()}` },
+  useEffect(() => {
+    let active = true;
+
+    axios
+      .get<ApiResponse<{ rooms?: Array<Room & { id?: string }> }>>("/api/rooms")
+      .then(({ data }) => {
+        if (!active) return;
+        if (data.success) {
+          setRooms(
+            (data.rooms ?? []).map((room) => ({
+              ...room,
+              _id: room._id || room.id || "",
+            })),
+          );
+        } else {
+          toast.error(data.message ?? "Could not load rooms");
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        toast.error(errorMessage(error, "Could not load rooms"));
       });
-      if (data.success) {
-        setIsOwner(data.role === "hotelOwner");
-        setSearchedCities(data.recentSearchedCities || []);
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load user");
-    }
-  };
 
-  useEffect(() => {
-    if (user) {
-      fetchUser();
-    }
-  }, [user]);
-
-  useEffect(() => {
-    fetchRooms();
+    return () => {
+      active = false;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!isLoaded || !user) return;
+    const userId = user.id;
+    let active = true;
+
+    getToken()
+      .then((token) =>
+        axios.get<
+          ApiResponse<{ role?: string; recentSearchedCities?: string[] }>
+        >("/api/user", {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      )
+      .then(({ data }) => {
+        if (!active) return;
+        if (data.success) {
+          setOwnerFlag(data.role === "hotelOwner");
+          setSearchedCities(data.recentSearchedCities ?? []);
+        } else {
+          setOwnerFlag(false);
+        }
+        setOwnerForUserId(userId);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setOwnerFlag(false);
+        setOwnerForUserId(userId);
+        toast.error(errorMessage(error, "Could not load user"));
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [getToken, isLoaded, user]);
 
   const value: AppContextValue = {
     currency,
     navigate,
     user,
+    authLoaded: isLoaded,
+    userReady,
     getToken,
     isOwner,
     setIsOwner,
@@ -111,9 +139,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     rooms,
     setRooms,
   };
+
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
-
 export function useAppContext() {
   const context = useContext(AppContext);
   if (!context) {

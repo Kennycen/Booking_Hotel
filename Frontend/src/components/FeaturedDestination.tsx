@@ -3,7 +3,7 @@ import HotelCard from "./HotelCard";
 import Title from "./Title";
 
 export default function FeaturedDestination() {
-    const { rooms, navigate } = useAppContext();
+  const { rooms, navigate } = useAppContext();
   return (
     rooms.length > 0 && (
       <div className="flex flex-col items-center px-6 md:px-16 lg:px-24 bg-slate-50 py-20">

@@ -1,144 +1,48 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-
-public record CreateRoomRequest(
-    string RoomType,
-    decimal PricePerNight,
-    List<string> Amenities,
-    List<string> Images);
-
-public record ToggleRoomRequest(Guid RoomId);
 
 [ApiController]
 [Route("api/rooms")]
 public class RoomsController : ControllerBase
 {
-    private readonly AppDbContext _db;
-    private readonly ClerkUserAccessor _users;
+    private readonly RoomService _rooms;
 
-    public RoomsController(AppDbContext db, ClerkUserAccessor users)
+    public RoomsController(RoomService rooms)
     {
-        _db = db;
-        _users = users;
+        _rooms = rooms;
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetRooms()
+    public async Task<IActionResult> GetRooms(CancellationToken cancellationToken)
     {
-        var rooms = await _db.Rooms
-            .Where(room => room.IsAvailable)
-            .OrderByDescending(room => room.CreatedAt)
-            .Select(room => new
-            {
-                room.Id,
-                room.RoomType,
-                room.PricePerNight,
-                room.Amenities,
-                room.Images,
-                room.IsAvailable,
-                Hotel = new
-                {
-                    room.Hotel.Id,
-                    room.Hotel.Name,
-                    room.Hotel.Address,
-                    room.Hotel.City,
-                    room.Hotel.Contact,
-                    Owner = new { room.Hotel.Owner.Image }
-                }
-            })
-            .ToListAsync();
-
-        return Ok(new { success = true, rooms });
+        var result = await _rooms.GetAvailableAsync(cancellationToken);
+        return Ok(new { success = true, rooms = result.Data });
     }
 
+    [Authorize]
     [HttpGet("owner")]
-    public async Task<IActionResult> GetOwnerRooms()
+    public async Task<IActionResult> GetOwnerRooms(CancellationToken cancellationToken)
     {
-        var hotel = await CurrentHotel();
-        if (hotel is null)
-        {
-            return Ok(new { success = false, message = "No hotel found" });
-        }
-
-        var rooms = await _db.Rooms
-            .Where(room => room.HotelId == hotel.Id)
-            .OrderByDescending(room => room.CreatedAt)
-            .Select(room => new
-            {
-                room.Id,
-                room.RoomType,
-                room.PricePerNight,
-                room.Amenities,
-                room.Images,
-                room.IsAvailable,
-                Hotel = new
-                {
-                    hotel.Id,
-                    hotel.Name,
-                    hotel.Address,
-                    hotel.City,
-                    hotel.Contact
-                }
-            })
-            .ToListAsync();
-
-        return Ok(new { success = true, rooms });
+        var result = await _rooms.GetOwnerRoomsAsync(cancellationToken);
+        return result.Success
+            ? Ok(new { success = true, rooms = result.Data })
+            : Ok(new { success = false, message = result.Message });
     }
 
+    [Authorize]
     [HttpPost]
-    public async Task<IActionResult> CreateRoom(CreateRoomRequest request)
+    [RequestSizeLimit(20_000_000)]
+    public async Task<IActionResult> CreateRoom([FromForm] CreateRoomForm form, CancellationToken cancellationToken)
     {
-        var hotel = await CurrentHotel();
-        if (hotel is null)
-        {
-            return Ok(new { success = false, message = "No hotel found" });
-        }
-
-        _db.Rooms.Add(new Room
-        {
-            HotelId = hotel.Id,
-            RoomType = request.RoomType,
-            PricePerNight = request.PricePerNight,
-            Amenities = request.Amenities,
-            Images = request.Images
-        });
-
-        await _db.SaveChangesAsync();
-
-        return Ok(new { success = true, message = "Room created successfully" });
+        var result = await _rooms.CreateAsync(form, cancellationToken);
+        return Ok(new { success = result.Success, message = result.Message });
     }
 
+    [Authorize]
     [HttpPost("toggle-availability")]
-    public async Task<IActionResult> ToggleAvailability(ToggleRoomRequest request)
+    public async Task<IActionResult> ToggleAvailability(ToggleRoomRequest request, CancellationToken cancellationToken)
     {
-        var hotel = await CurrentHotel();
-        if (hotel is null)
-        {
-            return Ok(new { success = false, message = "No hotel found" });
-        }
-
-        var room = await _db.Rooms.FirstOrDefaultAsync(room =>
-            room.Id == request.RoomId && room.HotelId == hotel.Id);
-
-        if (room is null)
-        {
-            return Ok(new { success = false, message = "Room not found" });
-        }
-
-        room.IsAvailable = !room.IsAvailable;
-        await _db.SaveChangesAsync();
-
-        return Ok(new { success = true, message = "Room availability Updated" });
-    }
-
-    private async Task<Hotel?> CurrentHotel()
-    {
-        var ownerId = _users.UserId;
-        if (string.IsNullOrWhiteSpace(ownerId))
-        {
-            return null;
-        }
-
-        return await _db.Hotels.FirstOrDefaultAsync(hotel => hotel.OwnerId == ownerId);
+        var result = await _rooms.ToggleAvailabilityAsync(request.RoomId, cancellationToken);
+        return Ok(new { success = result.Success, message = result.Message });
     }
 }
